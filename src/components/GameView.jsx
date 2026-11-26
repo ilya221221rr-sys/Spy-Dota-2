@@ -1,0 +1,840 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Check,
+  CheckCircle2,
+  Clock,
+  Crown,
+  Eye,
+  EyeOff,
+  Flame,
+  HelpCircle,
+  LogOut,
+  MessageSquare,
+  RotateCcw,
+  Send,
+  Settings2,
+  ShieldAlert,
+  Sparkles,
+  Trophy,
+  Vote,
+} from 'lucide-react';
+import { RuneAvatar } from './RuneAvatar.jsx';
+import { WordArtwork } from './WordArtwork.jsx';
+
+const CATEGORY_LABELS = {
+  heroes: 'Герои',
+  items: 'Предметы',
+  locations: 'Локации',
+};
+
+function formatSeconds(sec) {
+  const safe = Math.max(0, Math.floor(sec));
+  const m = String(Math.floor(safe / 60)).padStart(2, '0');
+  const s = String(safe % 60).padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+export function GameView({
+  room,
+  myPlayerId,
+  myRole,
+  voting,
+  spyGuess,
+  results,
+  clockOffsetMs,
+  isBusy,
+  onReopenSmokeModal,
+  onStartVotingEarly,
+  onCastVote,
+  onSubmitSpyGuess,
+  onRematch,
+  onReturnToLobby,
+  onTransferHost,
+  onSendChat,
+  onLeaveRoom,
+  onTimerExpired,
+}) {
+  const [hideRoleCard, setHideRoleCard] = useState(false);
+  const [crossedWordIds, setCrossedWordIds] = useState({});
+  const [selectedGuessWordId, setSelectedGuessWordId] = useState(null);
+  const [secondsLeft, setSecondsLeft] = useState(null);
+  const [chatInput, setChatInput] = useState('');
+
+  const feedEndRef = useRef(null);
+  const expiredTriggeredRef = useRef(null);
+
+  const me = room.players.find((p) => p.id === myPlayerId);
+  const isHost = Boolean(me?.isHost);
+  const status = room.status; // 'discussion' | 'voting' | 'spy_guess' | 'results'
+
+  // Reset crossed-out notepad on new round
+  useEffect(() => {
+    setCrossedWordIds({});
+    setSelectedGuessWordId(null);
+    setHideRoleCard(false);
+  }, [room.currentRound]);
+
+  // Synchronized server countdown timer
+  useEffect(() => {
+    if (!room.phaseEndsAt || status === 'results') {
+      setSecondsLeft(null);
+      return;
+    }
+
+    const endMs = new Date(room.phaseEndsAt).getTime();
+
+    const tick = () => {
+      const serverNowApprox = Date.now() + (clockOffsetMs || 0);
+      const diffSec = Math.max(0, Math.ceil((endMs - serverNowApprox) / 1000));
+      setSecondsLeft(diffSec);
+
+      const phaseKey = `${room.currentRound}-${status}-${room.phaseEndsAt}`;
+      if (diffSec === 0 && expiredTriggeredRef.current !== phaseKey) {
+        expiredTriggeredRef.current = phaseKey;
+        if (onTimerExpired) onTimerExpired();
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 500);
+    return () => clearInterval(interval);
+  }, [room.phaseEndsAt, room.currentRound, status, clockOffsetMs, onTimerExpired]);
+
+  useEffect(() => {
+    feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [room.events?.length]);
+
+  const toggleCrossWord = (wordId) => {
+    setCrossedWordIds((prev) => ({
+      ...prev,
+      [wordId]: !prev[wordId],
+    }));
+  };
+
+  const handleChatSubmit = async (e) => {
+    e.preventDefault();
+    const trimmed = chatInput.trim();
+    if (!trimmed) return;
+    setChatInput('');
+    await onSendChat(trimmed);
+  };
+
+  const categoryLabel =
+    CATEGORY_LABELS[myRole?.category || room.settings?.category] || 'Dota 2';
+  const onlinePlayers = room.players.filter((p) => p.isOnline);
+  const earlyVoteIds = myRole?.earlyVotePlayerIds || [];
+  const iVotedEarly = earlyVoteIds.includes(myPlayerId);
+  const majorityNeeded = Math.floor(Math.max(onlinePlayers.length, 3) / 2) + 1;
+
+  return (
+    <main className="relative z-10 mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 px-4 py-4 pb-10 sm:px-6 sm:py-6">
+      {/* Top Status & Server Timer Bar */}
+      <section className="relative overflow-hidden rounded-3xl border border-violet-400/25 bg-[#100b1e]/92 p-4 shadow-xl backdrop-blur-xl sm:px-6">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-violet-500 via-fuchsia-400 to-emerald-400" />
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="rounded-xl border border-violet-400/35 bg-violet-500/15 px-3 py-1 text-xs font-bold text-violet-200">
+              Раунд #{room.currentRound}
+            </span>
+
+            <span className="text-sm font-semibold text-slate-200">
+              {status === 'discussion' && 'Обсуждение и вопросы'}
+              {status === 'voting' && 'Голосование: кто шпион?'}
+              {status === 'spy_guess' && 'Шпион раскрыт: попытка угадать слово!'}
+              {status === 'results' && 'Итоги раунда и очки'}
+            </span>
+
+            <span className="hidden rounded-lg border border-emerald-500/25 bg-emerald-950/40 px-2.5 py-0.5 text-xs text-emerald-300 sm:inline-block">
+              Категория: {categoryLabel}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            {secondsLeft !== null && status !== 'results' && (
+              <div
+                className={`font-mono-code flex items-center gap-2 rounded-2xl border px-3.5 py-1.5 text-base font-extrabold sm:text-lg ${
+                  secondsLeft <= 15
+                    ? 'animate-pulse border-rose-500/60 bg-rose-950/60 text-rose-300 shadow-[0_0_20px_rgba(244,63,94,0.3)]'
+                    : secondsLeft <= 40
+                      ? 'border-amber-400/50 bg-amber-950/45 text-amber-200'
+                      : 'border-emerald-400/40 bg-[#081512] text-emerald-300'
+                }`}
+              >
+                <Clock className="h-4 w-4" />
+                <span>{formatSeconds(secondsLeft)}</span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={onLeaveRoom}
+              title="Покинуть комнату"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-950/35 px-3 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-900/55"
+            >
+              <LogOut className="h-3.5 w-3.5 text-rose-400" />
+              <span className="hidden sm:inline">Выйти</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ===================================================================== */}
+      {/* PHASE 4: RESULTS & SCOREBOARD & REMATCH                               */}
+      {/* ===================================================================== */}
+      {status === 'results' && results && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+          <div className="space-y-5 lg:col-span-7">
+            {/* Victory Banner */}
+            <section
+              className={`relative overflow-hidden rounded-3xl border p-6 shadow-2xl backdrop-blur-xl ${
+                results.winner === 'civilians'
+                  ? 'border-emerald-400/45 bg-gradient-to-br from-[#091c18]/95 via-[#0e1322]/95 to-[#120c24]/95'
+                  : 'border-rose-500/45 bg-gradient-to-br from-[#1d0b18]/95 via-[#150c24]/95 to-[#0e0a1a]/95'
+              }`}
+            >
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-0.5 text-xs font-semibold text-slate-200">
+                    <Trophy className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Раунд #{results.roundNumber} завершён</span>
+                  </div>
+                  <h2
+                    className={`font-display text-2xl sm:text-3xl ${
+                      results.winner === 'civilians'
+                        ? 'text-emerald-300'
+                        : 'text-rose-300'
+                    }`}
+                  >
+                    {results.winner === 'civilians'
+                      ? 'ПОБЕДА МИРНЫХ ИГРОКОВ!'
+                      : 'ПОБЕДА ШПИОНА ПОД СМОКАМИ!'}
+                  </h2>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                    {results.winReason}
+                  </p>
+                </div>
+              </div>
+
+              {/* Secret Word & Spy Reveal Grid */}
+              <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {/* Secret Word Card */}
+                <div className="rounded-2xl border border-emerald-400/30 bg-[#090714]/85 p-4">
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-emerald-300">
+                    Загаданное слово
+                  </div>
+                  <div className="mb-2.5 text-base font-bold text-white">
+                    {results.secretWord?.name}
+                  </div>
+                  <WordArtwork word={results.secretWord} className="h-32 w-full" />
+                </div>
+
+                {/* Spies Card */}
+                <div className="flex flex-col justify-between rounded-2xl border border-violet-400/30 bg-[#090714]/85 p-4">
+                  <div>
+                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-rose-300">
+                      В роли Шпиона {results.spyPlayerIds?.length > 1 ? 'были' : 'был'}
+                    </div>
+                    <div className="space-y-2">
+                      {room.players
+                        .filter((p) => (results.spyPlayerIds || []).includes(p.id))
+                        .map((spy) => (
+                          <div
+                            key={spy.id}
+                            className="flex items-center gap-2.5 rounded-xl border border-rose-500/30 bg-rose-950/30 p-2.5"
+                          >
+                            <RuneAvatar avatarId={spy.avatarId} size="sm" />
+                            <div>
+                              <div className="text-sm font-bold text-white">
+                                {spy.nickname}
+                              </div>
+                              <div className="text-[11px] text-rose-300">
+                                Шпион под Смоками
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+
+                  {results.spyGuessedWord && (
+                    <div className="mt-3 rounded-xl border border-violet-500/25 bg-violet-950/35 p-2.5 text-xs">
+                      <span className="text-slate-400">Догадка шпиона: </span>
+                      <strong className="text-violet-200">
+                        {results.spyGuessedWord.name}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Rematch & Return to Lobby CTA */}
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                {isHost ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={isBusy || room.players.length < 3}
+                      onClick={onRematch}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-600 via-purple-600 to-emerald-600 py-3.5 px-5 text-sm font-bold text-white shadow-[0_10px_30px_rgba(16,185,129,0.3)] transition hover:from-violet-500 hover:to-emerald-500 disabled:opacity-50"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      <span>Реванш (Новый раунд)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={onReturnToLobby}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl border border-violet-400/35 bg-[#130d24] py-3.5 px-5 text-sm font-semibold text-violet-200 transition hover:bg-violet-900/40"
+                    >
+                      <Settings2 className="h-4 w-4" />
+                      <span>В лобби (Настройки)</span>
+                    </button>
+                  </>
+                ) : (
+                  <div className="w-full rounded-2xl border border-violet-500/25 bg-[#0a0714]/80 px-4 py-3 text-center text-xs text-slate-300 sm:text-sm">
+                    Ожидаем хоста комнаты — скоро начнётся <strong>Реванш</strong> или возврат в лобби!
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Votes Breakdown */}
+            {results.votesBreakdown && results.votesBreakdown.length > 0 && (
+              <section className="rounded-3xl border border-violet-500/20 bg-[#0f0a1c]/88 p-5 backdrop-blur-xl">
+                <h3 className="font-display mb-3 text-sm text-slate-200">
+                  КАК ГОЛОСОВАЛ ОТРЯД
+                </h3>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {results.votesBreakdown.map((v, i) => {
+                    const votedSpy = (results.spyPlayerIds || []).includes(v.targetId);
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-violet-500/15 bg-[#090613]/85 px-3 py-2 text-xs"
+                      >
+                        <span className="truncate font-semibold text-slate-200">
+                          {v.voterNickname}
+                        </span>
+                        <span className="text-slate-500">→</span>
+                        <span
+                          className={`truncate font-bold ${
+                            votedSpy ? 'text-emerald-300' : 'text-rose-300'
+                          }`}
+                        >
+                          {v.targetNickname}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </div>
+
+          {/* Right Column: Scoreboard & Chat */}
+          <div className="space-y-5 lg:col-span-5">
+            <section className="rounded-3xl border border-violet-500/20 bg-[#0f0a1c]/88 p-5 shadow-xl backdrop-blur-xl">
+              <div className="mb-4 flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-amber-400" />
+                <h3 className="font-display text-base text-white">
+                  ТАБЛИЦА ОЧКОВ
+                </h3>
+              </div>
+
+              <div className="space-y-2.5">
+                {[...room.players]
+                  .sort((a, b) => b.score - a.score)
+                  .map((p, idx) => {
+                    const delta = Number(results.scoreDeltas?.[p.id] || 0);
+                    const wasSpy = (results.spyPlayerIds || []).includes(p.id);
+
+                    return (
+                      <div
+                        key={p.id}
+                        className="flex items-center justify-between gap-3 rounded-2xl border border-violet-500/15 bg-[#090613]/85 px-3.5 py-2.5"
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="font-mono-code w-5 text-xs font-bold text-slate-400">
+                            #{idx + 1}
+                          </span>
+                          <RuneAvatar avatarId={p.avatarId} size="sm" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate text-sm font-bold text-white">
+                                {p.nickname}
+                              </span>
+                              {wasSpy && (
+                                <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">
+                                  Шпион
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {delta > 0 && (
+                            <span className="rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-2 py-0.5 text-xs font-bold text-emerald-300">
+                              +{delta}
+                            </span>
+                          )}
+                          <span className="font-mono-code text-base font-extrabold text-amber-300">
+                            {p.score}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </section>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* PHASE 3: SPY CAUGHT — LAST CHANCE TO GUESS THE SECRET WORD            */}
+      {/* ===================================================================== */}
+      {status === 'spy_guess' && spyGuess && (
+        <section className="rounded-3xl border border-amber-400/35 bg-[#120c1f]/92 p-5 shadow-2xl backdrop-blur-xl sm:p-7">
+          {spyGuess.amICaughtSpy ? (
+            <div>
+              <div className="mb-5 text-center">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-400/40 bg-rose-500/15 px-3.5 py-1 text-xs font-bold text-rose-300">
+                  <Flame className="h-3.5 w-3.5" />
+                  ВАС ВЫЧИСЛИЛИ НА ГОЛОСОВАНИИ!
+                </span>
+                <h2 className="font-display mt-2 text-2xl text-white sm:text-3xl">
+                  ПОСЛЕДНИЙ ШАНС — УГАДАЙТЕ СЛОВО!
+                </h2>
+                <p className="mt-1 text-sm text-slate-300">
+                  Если вы назовёте правильное слово категории «{categoryLabel}», победа
+                  и +4 очка достанутся вам!
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
+                {(spyGuess.categoryWords || []).map((w) => {
+                  const selected = selectedGuessWordId === w.id;
+                  return (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => setSelectedGuessWordId(w.id)}
+                      className={`flex flex-col items-start rounded-2xl border p-3 text-left transition ${
+                        selected
+                          ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                          : 'border-violet-500/20 bg-[#090613]/85 hover:border-violet-400/45'
+                      }`}
+                    >
+                      <span className="text-xs font-bold text-white sm:text-sm">
+                        {w.name}
+                      </span>
+                      {w.hint && (
+                        <span className="mt-1 line-clamp-2 text-[11px] text-slate-400">
+                          {w.hint}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-6 flex justify-center">
+                <button
+                  type="button"
+                  disabled={!selectedGuessWordId || isBusy}
+                  onClick={() => onSubmitSpyGuess(selectedGuessWordId)}
+                  className="w-full max-w-md rounded-2xl bg-gradient-to-r from-rose-600 via-fuchsia-600 to-emerald-600 py-4 text-sm font-bold text-white shadow-xl transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  Подтвердить догадку и раскрыть карты!
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 animate-pulse items-center justify-center rounded-2xl border border-amber-400/40 bg-amber-500/15">
+                <HelpCircle className="h-8 w-8 text-amber-300" />
+              </div>
+              <h2 className="font-display text-2xl text-white sm:text-3xl">
+                ШПИОН {spyGuess.caughtSpyNickname?.toUpperCase()} ПОЙМАН!
+              </h2>
+              <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-slate-300">
+                Отряд вычислил шпиона! Но не спешите праздновать — прямо сейчас{' '}
+                <strong className="text-amber-300">
+                  {spyGuess.caughtSpyNickname}
+                </strong>{' '}
+                пытается угадать загаданное слово из списка категории.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ===================================================================== */}
+      {/* PHASES 1 & 2: DISCUSSION AND VOTING                                   */}
+      {/* ===================================================================== */}
+      {(status === 'discussion' || status === 'voting') && (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+          {/* Left Main Column */}
+          <div className="space-y-5 lg:col-span-7">
+            {/* Personal Secret Role Card */}
+            {myRole && (
+              <section
+                className={`relative overflow-hidden rounded-3xl border p-5 shadow-xl backdrop-blur-xl ${
+                  myRole.isSpy
+                    ? 'border-rose-500/40 bg-[#140a1d]/90'
+                    : 'border-emerald-400/35 bg-[#0c141d]/90'
+                }`}
+              >
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles
+                      className={`h-4 w-4 ${
+                        myRole.isSpy ? 'text-rose-400' : 'text-emerald-400'
+                      }`}
+                    />
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Ваша секретная роль
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={onReopenSmokeModal}
+                      className="rounded-xl border border-violet-400/30 bg-violet-950/40 px-2.5 py-1 text-xs font-medium text-violet-200 transition hover:border-emerald-400/40"
+                    >
+                      Анимация дыма
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setHideRoleCard((v) => !v)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/30 bg-[#090613]/80 px-2.5 py-1 text-xs font-semibold text-slate-200 transition hover:bg-violet-950/60"
+                    >
+                      {hideRoleCard ? (
+                        <>
+                          <Eye className="h-3.5 w-3.5 text-emerald-400" />
+                          <span>Показать роль</span>
+                        </>
+                      ) : (
+                        <>
+                          <EyeOff className="h-3.5 w-3.5 text-violet-300" />
+                          <span>Скрыть в дыму</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {hideRoleCard ? (
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-violet-500/30 bg-[#090613]/75 py-8 text-center">
+                    <span className="text-sm font-semibold text-violet-200">
+                      Карточка скрыта под Смоками от чужих глаз
+                    </span>
+                    <span className="mt-1 text-xs text-slate-400">
+                      Нажмите «Показать роль», когда будете готовы посмотреть
+                    </span>
+                  </div>
+                ) : myRole.isSpy ? (
+                  <div className="flex flex-col items-center gap-3 rounded-2xl border border-rose-500/30 bg-gradient-to-br from-rose-950/45 via-[#13091e] to-violet-950/45 p-5 text-center sm:flex-row sm:text-left">
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-rose-400/45 bg-rose-500/20 shadow-[0_0_25px_rgba(244,63,94,0.3)]">
+                      <ShieldAlert className="h-8 w-8 text-rose-300" />
+                    </div>
+                    <div>
+                      <div className="font-display text-2xl text-rose-300 sm:text-3xl">
+                        ТЫ ШПИОН
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-300 sm:text-sm">
+                        Притворяйтесь, что знаете слово! Используйте список слов
+                        категории ниже и нажимайте на слова, чтобы вычёркивать
+                        неподходящие варианты.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-12">
+                    <div className="sm:col-span-5">
+                      <WordArtwork word={myRole.word} className="h-36 w-full" />
+                    </div>
+                    <div className="sm:col-span-7">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                        Загаданное слово отряда
+                      </div>
+                      <div className="font-display mt-1 text-2xl text-white">
+                        {myRole.word?.name}
+                      </div>
+                      {myRole.word?.hint && (
+                        <p className="mt-1.5 text-xs leading-relaxed text-slate-300 sm:text-sm">
+                          {myRole.word.hint}
+                        </p>
+                      )}
+                      {myRole.firstSpeakerNickname && (
+                        <div className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-950/40 px-2.5 py-1 text-xs text-violet-200">
+                          <span>Первый вопрос задаёт:</span>
+                          <strong className="text-emerald-300">
+                            {myRole.firstSpeakerNickname}
+                          </strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* VOTING SECTION (When status === 'voting') */}
+            {status === 'voting' && (
+              <section className="rounded-3xl border border-emerald-400/40 bg-[#0e1022]/92 p-5 shadow-2xl backdrop-blur-xl">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Vote className="h-5 w-5 text-emerald-400" />
+                    <h2 className="font-display text-lg text-white">
+                      ГОЛОСУЙТЕ ПРОТИВ ШПИОНА
+                    </h2>
+                  </div>
+                  <span className="rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-2.5 py-1 text-xs font-bold text-emerald-200">
+                    Проголосовало: {(voting?.votedPlayerIds || []).length} /{' '}
+                    {onlinePlayers.length}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {room.players.map((p) => {
+                    const isSelf = p.id === myPlayerId;
+                    const isMyTarget = voting?.myVoteTargetId === p.id;
+                    const hasVoted = (voting?.votedPlayerIds || []).includes(p.id);
+
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        disabled={isSelf || isBusy}
+                        onClick={() => onCastVote(p.id)}
+                        className={`flex items-center justify-between gap-3 rounded-2xl border p-3.5 text-left transition ${
+                          isMyTarget
+                            ? 'border-rose-400 bg-rose-500/20 shadow-[0_0_24px_rgba(244,63,94,0.28)]'
+                            : isSelf
+                              ? 'cursor-not-allowed border-violet-500/15 bg-[#090613]/50 opacity-60'
+                              : 'border-violet-500/20 bg-[#090613]/85 hover:border-emerald-400/45'
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <RuneAvatar
+                            avatarId={p.avatarId}
+                            size="sm"
+                            isOnline={p.isOnline}
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-bold text-white">
+                              {p.nickname} {isSelf && '(Вы)'}
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              {hasVoted ? 'Уже проголосовал' : 'Думает...'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {isMyTarget ? (
+                          <span className="shrink-0 rounded-lg bg-rose-500 px-2.5 py-1 text-xs font-bold text-white">
+                            Ваш голос
+                          </span>
+                        ) : hasVoted ? (
+                          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* Category Words Interactive Grid */}
+            {myRole?.categoryWords && (
+              <section className="rounded-3xl border border-violet-500/20 bg-[#0f0a1c]/88 p-5 shadow-xl backdrop-blur-xl">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-display text-sm text-white sm:text-base">
+                      ВСЕ СЛОВА КАТЕГОРИИ «{categoryLabel.toUpperCase()}»
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Нажмите на карточку слова, чтобы вычеркнуть неподходящее (видно
+                      только вам)
+                    </p>
+                  </div>
+                  <span className="rounded-lg border border-violet-400/25 bg-violet-950/40 px-2.5 py-1 text-xs font-semibold text-violet-200">
+                    {myRole.categoryWords.length} слов
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {myRole.categoryWords.map((w) => {
+                    const crossed = Boolean(crossedWordIds[w.id]);
+                    const isSecretMatch = !myRole.isSpy && myRole.word?.id === w.id;
+
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => toggleCrossWord(w.id)}
+                        className={`rounded-xl border px-3 py-2.5 text-left text-xs transition ${
+                          crossed
+                            ? 'border-slate-800 bg-[#080610]/50 text-slate-500 line-through opacity-55'
+                            : isSecretMatch
+                              ? 'border-emerald-400/50 bg-emerald-950/35 font-bold text-emerald-200'
+                              : 'border-violet-500/20 bg-[#090613]/85 font-medium text-slate-200 hover:border-violet-400/45'
+                        }`}
+                      >
+                        {w.name}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Early Voting Controls during Discussion */}
+                {status === 'discussion' && (
+                  <div className="mt-5 flex flex-col gap-2.5 border-t border-violet-500/15 pt-4 sm:flex-row">
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onStartVotingEarly(false)}
+                      className={`flex flex-1 items-center justify-center gap-2 rounded-2xl border py-3 px-4 text-xs font-bold transition sm:text-sm ${
+                        iVotedEarly
+                          ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-200'
+                          : 'border-violet-400/35 bg-violet-600/20 text-violet-100 hover:bg-violet-600/35'
+                      }`}
+                    >
+                      <Check className="h-4 w-4" />
+                      <span>
+                        Голосовать досрочно ({earlyVoteIds.length}/{majorityNeeded})
+                      </span>
+                    </button>
+
+                    {isHost && (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => onStartVotingEarly(true)}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 py-3 px-4 text-xs font-bold text-white shadow-lg transition hover:from-emerald-500 hover:to-teal-500 sm:text-sm"
+                      >
+                        <Vote className="h-4 w-4" />
+                        <span>Начать голосование (Хост)</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+          </div>
+
+          {/* Right Sidebar: Players & Chat */}
+          <div className="space-y-5 lg:col-span-5">
+            {/* Players & Scores */}
+            <section className="rounded-3xl border border-violet-500/20 bg-[#0f0a1c]/88 p-5 shadow-xl backdrop-blur-xl">
+              <h3 className="font-display mb-3 text-sm text-white">
+                ИГРОКИ В МАТЧЕ ({room.players.length})
+              </h3>
+              <div className="space-y-2">
+                {room.players.map((p) => {
+                  const isMe = p.id === myPlayerId;
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex items-center justify-between gap-2 rounded-2xl border border-violet-500/15 bg-[#090613]/80 px-3 py-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <div className="relative">
+                          <RuneAvatar
+                            avatarId={p.avatarId}
+                            size="sm"
+                            isOnline={p.isOnline}
+                          />
+                          <span
+                            className={`absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border border-[#090613] ${
+                              p.isOnline ? 'bg-emerald-400' : 'bg-amber-400'
+                            }`}
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs font-bold text-white sm:text-sm">
+                              {p.nickname}
+                            </span>
+                            {p.isHost && (
+                              <Crown className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            {p.score} очк.
+                          </div>
+                        </div>
+                      </div>
+
+                      {isHost && !isMe && p.isOnline && (
+                        <button
+                          type="button"
+                          onClick={() => onTransferHost(p.id)}
+                          title={`Передать права хоста игроку ${p.nickname}`}
+                          className="rounded-lg border border-amber-400/25 bg-amber-500/10 p-1.5 text-amber-300 transition hover:bg-amber-500/25"
+                        >
+                          <Crown className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* In-game Chat & Log */}
+            <section className="rounded-3xl border border-violet-500/20 bg-[#0f0a1c]/88 p-5 shadow-xl backdrop-blur-xl">
+              <div className="mb-3 flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-violet-400" />
+                <h3 className="font-display text-sm text-slate-200">
+                  ЧАТ ОБСУЖДЕНИЯ
+                </h3>
+              </div>
+
+              <div className="mb-3 max-h-52 space-y-1.5 overflow-y-auto rounded-2xl border border-violet-500/15 bg-[#080510]/85 p-3 text-xs">
+                {(room.events || []).map((ev) => (
+                  <div key={ev.id} className="leading-relaxed">
+                    {ev.type === 'chat' ? (
+                      <div>
+                        <span className="font-bold text-emerald-300">
+                          {ev.author}:{' '}
+                        </span>
+                        <span className="text-slate-200">{ev.message}</span>
+                      </div>
+                    ) : (
+                      <div className="text-violet-300/85">• {ev.message}</div>
+                    )}
+                  </div>
+                ))}
+                <div ref={feedEndRef} />
+              </div>
+
+              <form onSubmit={handleChatSubmit} className="flex gap-2">
+                <input
+                  type="text"
+                  maxLength={140}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Задать вопрос в чат..."
+                  className="min-w-0 flex-1 rounded-xl border border-violet-500/25 bg-[#090613] px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-emerald-400/60 focus:outline-none sm:text-sm"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex shrink-0 items-center justify-center rounded-xl border border-emerald-400/35 bg-emerald-500/20 px-3.5 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                </button>
+              </form>
+            </section>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
