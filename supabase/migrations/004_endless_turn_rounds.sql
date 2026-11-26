@@ -231,9 +231,12 @@ BEGIN
     AND is_online = true
     AND last_seen_at < now() - interval '20 seconds';
 
-  IF v_room.host_player_id IS NOT NULL THEN
+  -- Автоматический перенос короны хоста: только в лобби и только после
+  -- 120 секунд отсутствия хоста (не 35 сек, чтобы не «перескакивать» хоста
+  -- при фоновой работе браузера).
+  IF v_room.status = 'lobby' AND v_room.host_player_id IS NOT NULL THEN
     SELECT * INTO v_host FROM public.room_players WHERE id = v_room.host_player_id;
-    IF NOT FOUND OR v_host.last_seen_at < now() - interval '35 seconds' THEN
+    IF NOT FOUND OR v_host.last_seen_at < now() - interval '120 seconds' THEN
       SELECT * INTO v_next_host
       FROM public.room_players
       WHERE room_id = p_room_id
@@ -255,7 +258,7 @@ BEGIN
         PERFORM public._append_room_event(
           p_room_id,
           'host',
-          format('Хост потерял связь — корона автоматически передана игроку %s', v_next_host.nickname)
+          format('Хост отсутствует — корона автоматически передана игроку %s', v_next_host.nickname)
         );
         PERFORM public._touch_room_signal(
           v_room.code,
