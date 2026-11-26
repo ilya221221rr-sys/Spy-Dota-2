@@ -71,20 +71,20 @@ export function LobbyView({
           {
             id: 'heroes',
             label: 'Герои',
-            description: 'Легендарные персонажи Света и Тьмы',
-            wordCount: 16,
+            description: 'Все 127 героев Света и Тьмы',
+            wordCount: 127,
           },
           {
             id: 'items',
             label: 'Предметы',
-            description: 'Артефакты из лавки и трофеи Рошана',
-            wordCount: 14,
+            description: 'Все предметы лавки, Рошана и нейтралки',
+            wordCount: 331,
           },
           {
             id: 'locations',
             label: 'Локации',
             description: 'Ключевые точки и объекты карты Dota 2',
-            wordCount: 12,
+            wordCount: 20,
           },
         ];
 
