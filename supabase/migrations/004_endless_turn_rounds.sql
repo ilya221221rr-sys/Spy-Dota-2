@@ -961,3 +961,77 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.rpc_submit_turn(text, text, text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.rpc_skip_turn(text, text) TO anon, authenticated;
+
+-- 10. Обновляем rpc_create_room: по умолчанию round_time_seconds = 0 (бесконечные круги без лимита времени)
+CREATE OR REPLACE FUNCTION public.rpc_create_room(p_nickname text, p_avatar_id text DEFAULT 'smoke'::text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  v_nick text := left(regexp_replace(trim(COALESCE(p_nickname, '')), '\s+', ' ', 'g'), 18);
+  v_avatar text := COALESCE(NULLIF(trim(p_avatar_id), ''), 'smoke');
+  v_code text := '';
+  v_room_id uuid := gen_random_uuid();
+  v_player_id uuid := gen_random_uuid();
+  v_token text := gen_random_uuid()::text;
+  v_attempt int;
+  i int;
+BEGIN
+  IF char_length(v_nick) < 2 THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Введите ник длиной от 2 до 18 символов');
+  END IF;
+
+  FOR v_attempt IN 1..200 LOOP
+    v_code := '';
+    FOR i IN 1..4 LOOP
+      v_code := v_code || substr(v_alphabet, floor(random() * length(v_alphabet) + 1)::int, 1);
+    END LOOP;
+
+    DELETE FROM public.rooms
+    WHERE code = v_code AND (status = 'closed' OR updated_at < now() - interval '12 hours');
+
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM public.rooms WHERE code = v_code);
+  END LOOP;
+
+  IF EXISTS (SELECT 1 FROM public.rooms WHERE code = v_code) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'Не удалось сгенерировать код комнаты, попробуйте снова');
+  END IF;
+
+  INSERT INTO public.rooms (
+    id, code, status, category, round_time_seconds, spy_count, current_round, host_player_id, events
+  )
+  VALUES (
+    v_room_id,
+    v_code,
+    'lobby',
+    'heroes',
+    0,
+    1,
+    0,
+    v_player_id,
+    jsonb_build_array(
+      jsonb_build_object(
+        'id', gen_random_uuid()::text,
+        'type', 'system',
+        'message', format('%s зажёг Смоки и создал комнату %s', v_nick, v_code),
+        'author', NULL,
+        'createdAt', now()
+      )
+    )
+  );
+
+  INSERT INTO public.room_players (
+    id, room_id, nickname, avatar_id, session_token, is_host, is_online, is_ready, score
+  )
+  VALUES (
+    v_player_id, v_room_id, v_nick, v_avatar, v_token, true, true, true, 0
+  );
+
+  PERFORM public._touch_room_signal(v_code, 'lobby', format('Комната %s создана!', v_code), 'emerald');
+
+  RETURN public.rpc_get_room_state(v_code, v_token);
+END;
+$function$;
