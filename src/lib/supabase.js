@@ -130,6 +130,19 @@ export const gameApi = {
       p_session_token: sessionToken,
     }),
 
+  submitTurn: ({ roomCode, sessionToken, text = '' }) =>
+    callRpc('rpc_submit_turn', {
+      p_room_code: roomCode,
+      p_session_token: sessionToken,
+      p_text: text,
+    }),
+
+  skipTurn: ({ roomCode, sessionToken }) =>
+    callRpc('rpc_skip_turn', {
+      p_room_code: roomCode,
+      p_session_token: sessionToken,
+    }),
+
   startVotingEarly: ({ roomCode, sessionToken, forceByHost = false }) =>
     callRpc('rpc_start_voting_early', {
       p_room_code: roomCode,

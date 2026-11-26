@@ -46,6 +46,7 @@ export default function App() {
   const [room, setRoom] = useState(null);
   const [me, setMe] = useState(null);
   const [myRole, setMyRole] = useState(null);
+  const [discussion, setDiscussion] = useState(null);
   const [voting, setVoting] = useState(null);
   const [spyGuess, setSpyGuess] = useState(null);
   const [results, setResults] = useState(null);
@@ -108,6 +109,7 @@ export default function App() {
       setRoom(payload.room);
       setMe(payload.me);
       setMyRole(payload.myRole || null);
+      setDiscussion(payload.discussion || null);
       setVoting(payload.voting || null);
       setSpyGuess(payload.spyGuess || null);
       setResults(payload.results || null);
@@ -462,6 +464,31 @@ export default function App() {
     setIsBusy(false);
   };
 
+  const handleSubmitTurn = async (text = '') => {
+    if (!me) return;
+    setIsBusy(true);
+    await runRoomAction(
+      gameApi.submitTurn({
+        roomCode: me.roomCode,
+        sessionToken: me.sessionToken,
+        text,
+      })
+    );
+    setIsBusy(false);
+  };
+
+  const handleSkipTurn = async () => {
+    if (!me) return;
+    setIsBusy(true);
+    await runRoomAction(
+      gameApi.skipTurn({
+        roomCode: me.roomCode,
+        sessionToken: me.sessionToken,
+      })
+    );
+    setIsBusy(false);
+  };
+
   const handleStartVotingEarly = async (forceByHost = false) => {
     if (!me) return;
     setIsBusy(true);
@@ -566,12 +593,15 @@ export default function App() {
             room={room}
             myPlayerId={me.playerId}
             myRole={myRole}
+            discussion={discussion}
             voting={voting}
             spyGuess={spyGuess}
             results={results}
             clockOffsetMs={clockOffsetMs}
             isBusy={isBusy}
             onReopenSmokeModal={() => setSmokeModalOpen(true)}
+            onSubmitTurn={handleSubmitTurn}
+            onSkipTurn={handleSkipTurn}
             onStartVotingEarly={handleStartVotingEarly}
             onCastVote={handleCastVote}
             onSubmitSpyGuess={handleSubmitSpyGuess}

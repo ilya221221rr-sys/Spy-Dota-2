@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  ArrowRight,
   Check,
   CheckCircle2,
   Clock,
@@ -8,13 +9,17 @@ import {
   EyeOff,
   Flame,
   HelpCircle,
+  Infinity as InfinityIcon,
   LogOut,
   MessageSquare,
+  Mic,
+  Repeat,
   RotateCcw,
   Search,
   Send,
   Settings2,
   ShieldAlert,
+  SkipForward,
   Sparkles,
   Trophy,
   Vote,
@@ -85,12 +90,15 @@ export function GameView({
   room,
   myPlayerId,
   myRole,
+  discussion,
   voting,
   spyGuess,
   results,
   clockOffsetMs,
   isBusy,
   onReopenSmokeModal,
+  onSubmitTurn,
+  onSkipTurn,
   onStartVotingEarly,
   onCastVote,
   onSubmitSpyGuess,
@@ -110,9 +118,11 @@ export function GameView({
   const [guessSubfilter, setGuessSubfilter] = useState('all');
   const [selectedGuessWordId, setSelectedGuessWordId] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(null);
+  const [turnInput, setTurnInput] = useState('');
   const [chatInput, setChatInput] = useState('');
 
   const feedEndRef = useRef(null);
+  const turnLogEndRef = useRef(null);
   const expiredTriggeredRef = useRef(null);
 
   const me = room.players.find((p) => p.id === myPlayerId);
@@ -161,11 +171,30 @@ export function GameView({
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [room.events?.length]);
 
+  useEffect(() => {
+    turnLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [discussion?.turnLog?.length]);
+
   const toggleCrossWord = (wordId) => {
     setCrossedWordIds((prev) => ({
       ...prev,
       [wordId]: !prev[wordId],
     }));
+  };
+
+  const handleTurnSubmit = async (e) => {
+    e.preventDefault();
+    const trimmed = turnInput.trim();
+    if (!trimmed || !onSubmitTurn) return;
+    setTurnInput('');
+    await onSubmitTurn(trimmed);
+  };
+
+  const handleVoiceTurnPass = async () => {
+    if (!onSubmitTurn) return;
+    const trimmed = turnInput.trim();
+    setTurnInput('');
+    await onSubmitTurn(trimmed);
   };
 
   const handleChatSubmit = async (e) => {
@@ -205,16 +234,27 @@ export function GameView({
         <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-violet-500 via-fuchsia-400 to-emerald-400" />
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             <span className="rounded-xl border border-violet-400/35 bg-violet-500/15 px-3 py-1 text-xs font-bold text-violet-200">
-              Раунд #{room.currentRound}
+              Партия #{room.currentRound}
             </span>
 
+            {status === 'discussion' && discussion && (
+              <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-400/45 bg-emerald-500/15 px-3 py-1 text-xs font-extrabold text-emerald-200">
+                <Repeat className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Круг #{discussion.cycle}</span>
+                <InfinityIcon className="h-3.5 w-3.5 text-emerald-300" />
+              </span>
+            )}
+
             <span className="text-sm font-semibold text-slate-200">
-              {status === 'discussion' && 'Обсуждение и вопросы'}
+              {status === 'discussion' &&
+                (discussion?.currentTurnNickname
+                  ? `Сейчас ход: ${discussion.currentTurnNickname}`
+                  : 'Пошаговые раунды до голосования')}
               {status === 'voting' && 'Голосование: кто шпион?'}
               {status === 'spy_guess' && 'Шпион раскрыт: попытка угадать слово!'}
-              {status === 'results' && 'Итоги раунда и очки'}
+              {status === 'results' && 'Итоги партии и очки'}
             </span>
 
             <span className="hidden rounded-lg border border-emerald-500/25 bg-emerald-950/40 px-2.5 py-0.5 text-xs text-emerald-300 sm:inline-block">
@@ -223,6 +263,13 @@ export function GameView({
           </div>
 
           <div className="flex items-center gap-2.5">
+            {status === 'discussion' && secondsLeft === null && (
+              <div className="hidden items-center gap-1.5 rounded-2xl border border-emerald-400/35 bg-[#081512] px-3 py-1.5 text-xs font-bold text-emerald-300 sm:flex">
+                <InfinityIcon className="h-4 w-4" />
+                <span>Раунды до голосования</span>
+              </div>
+            )}
+
             {secondsLeft !== null && status !== 'results' && (
               <div
                 className={`font-mono-code flex items-center gap-2 rounded-2xl border px-3.5 py-1.5 text-base font-extrabold sm:text-lg ${
@@ -232,6 +279,11 @@ export function GameView({
                       ? 'border-amber-400/50 bg-amber-950/45 text-amber-200'
                       : 'border-emerald-400/40 bg-[#081512] text-emerald-300'
                 }`}
+                title={
+                  status === 'discussion'
+                    ? 'Время на текущий ход игрока'
+                    : 'Оставшееся время фазы'
+                }
               >
                 <Clock className="h-4 w-4" />
                 <span>{formatSeconds(secondsLeft)}</span>
@@ -728,6 +780,242 @@ export function GameView({
                     </div>
                   </div>
                 )}
+              </section>
+            )}
+
+            {/* =============================================================== */}
+            {/* ENDLESS TURN-BASED ROUNDS ARENA (Круг #1 -> #2 -> #3 ... ∞)     */}
+            {/* =============================================================== */}
+            {status === 'discussion' && discussion && (
+              <section className="rounded-3xl border border-violet-400/35 bg-gradient-to-br from-[#120b24]/95 via-[#0e0c1f]/95 to-[#091519]/95 p-5 shadow-2xl backdrop-blur-xl">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/45 bg-emerald-500/15 px-2.5 py-0.5 text-xs font-extrabold text-emerald-300">
+                        <Repeat className="h-3.5 w-3.5" />
+                        КРУГ #{discussion.cycle}
+                      </span>
+                      <span className="text-xs font-semibold text-violet-200">
+                        Бесконечные раунды до голосования
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Игроки по очереди дают намёк/ассоциацию или задают вопрос. После последнего игрока сразу начинается следующий круг!
+                    </p>
+                  </div>
+
+                  {isHost && !discussion.isMyTurn && (
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={onSkipTurn}
+                      title="Пропустить ход текущего игрока, если он отошёл"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+                    >
+                      <SkipForward className="h-3.5 w-3.5" />
+                      <span>Пропустить AFK</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Turn Order Chain for Current Circle */}
+                {discussion.turnOrder && discussion.turnOrder.length > 0 && (
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    {discussion.turnOrder.map((tp, idx) => {
+                      const isCurrent = tp.id === discussion.currentTurnPlayerId;
+                      const alreadyWentInThisCircle = idx < (discussion.turnIndex || 0);
+                      const isMeTurnCard = tp.id === myPlayerId;
+
+                      return (
+                        <React.Fragment key={tp.id}>
+                          <div
+                            className={`flex items-center gap-2 rounded-2xl border px-3 py-1.5 text-xs transition ${
+                              isCurrent
+                                ? 'border-emerald-400 bg-emerald-500/20 font-bold text-white shadow-[0_0_20px_rgba(16,185,129,0.28)]'
+                                : alreadyWentInThisCircle
+                                  ? 'border-violet-500/20 bg-[#090613]/65 text-slate-400'
+                                  : 'border-violet-500/25 bg-[#090613]/90 text-slate-200'
+                            }`}
+                          >
+                            <span className="font-mono-code text-[10px] text-slate-400">
+                              {idx + 1}.
+                            </span>
+                            <RuneAvatar
+                              avatarId={tp.avatarId}
+                              size="sm"
+                              isOnline={tp.isOnline}
+                            />
+                            <span className="max-w-[110px] truncate">
+                              {tp.nickname}
+                              {isMeTurnCard ? ' (Вы)' : ''}
+                            </span>
+                            {isCurrent ? (
+                              <span className="rounded-md bg-emerald-400 px-1.5 py-0.5 text-[10px] font-extrabold text-[#06130f]">
+                                ХОДИТ
+                              </span>
+                            ) : alreadyWentInThisCircle ? (
+                              <Check className="h-3.5 w-3.5 text-emerald-400" />
+                            ) : null}
+                          </div>
+                          {idx < discussion.turnOrder.length - 1 && (
+                            <ArrowRight className="h-3.5 w-3.5 shrink-0 text-violet-400/50" />
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Active Turn Action Box */}
+                {discussion.isMyTurn ? (
+                  <div className="rounded-2xl border border-emerald-400/50 bg-emerald-950/25 p-4 shadow-[0_0_30px_rgba(16,185,129,0.16)]">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="font-display text-sm text-emerald-300 sm:text-base">
+                        ВАШ ХОД В КРУГЕ #{discussion.cycle}!
+                      </span>
+                      <span className="text-[11px] text-emerald-200/80">
+                        Не называйте само слово напрямую
+                      </span>
+                    </div>
+
+                    <form onSubmit={handleTurnSubmit} className="space-y-2.5">
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          type="text"
+                          maxLength={180}
+                          value={turnInput}
+                          onChange={(e) => setTurnInput(e.target.value)}
+                          placeholder="Напишите ассоциацию, намёк или вопрос отряду..."
+                          className="min-w-0 flex-1 rounded-xl border border-emerald-400/35 bg-[#080612] px-3.5 py-2.5 text-xs text-white placeholder-slate-400 focus:border-emerald-400 focus:outline-none sm:text-sm"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!turnInput.trim() || isBusy}
+                          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-xs font-extrabold text-[#04120e] shadow-lg transition hover:from-emerald-400 hover:to-teal-400 disabled:cursor-not-allowed disabled:opacity-45 sm:text-sm"
+                        >
+                          <Send className="h-4 w-4" />
+                          <span>Отправить ход</span>
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                        <span className="text-[11px] text-slate-400">
+                          Играете в голосе / Discord? Скажите вслух и передайте очередь:
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={handleVoiceTurnPass}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-violet-400/40 bg-violet-600/20 px-3 py-1.5 text-xs font-bold text-violet-100 transition hover:bg-violet-600/35 disabled:opacity-50"
+                        >
+                          <Mic className="h-3.5 w-3.5 text-emerald-300" />
+                          <span>Сказал вслух — передать ход →</span>
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-500/25 bg-[#090613]/85 px-4 py-3">
+                    <div className="flex items-center gap-2.5 text-xs sm:text-sm">
+                      <span className="h-2.5 w-2.5 animate-ping rounded-full bg-emerald-400" />
+                      <span className="text-slate-300">
+                        Сейчас ходит игрок{' '}
+                        <strong className="text-emerald-300">
+                          {discussion.currentTurnNickname || 'отряда'}
+                        </strong>{' '}
+                        (Круг #{discussion.cycle})
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      Готовьте свою ассоциацию или следите за подозрительными ответами!
+                    </span>
+                  </div>
+                )}
+
+                {/* History of Clues Across Endless Circles */}
+                <div className="mt-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      История раундов ({(discussion.turnLog || []).length} ходов)
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Все круги сохраняются до голосования
+                    </span>
+                  </div>
+
+                  <div className="max-h-52 space-y-2 overflow-y-auto rounded-2xl border border-violet-500/15 bg-[#070510]/85 p-3">
+                    {(!discussion.turnLog || discussion.turnLog.length === 0) ? (
+                      <div className="py-4 text-center text-xs text-slate-400">
+                        Круг #1 открыт — ждём первый ход от{' '}
+                        <strong className="text-violet-200">
+                          {discussion.currentTurnNickname}
+                        </strong>
+                        !
+                      </div>
+                    ) : (
+                      discussion.turnLog.map((entry) => (
+                        <div
+                          key={entry.id || entry.turnNumber}
+                          className="flex items-start justify-between gap-2.5 rounded-xl border border-violet-500/15 bg-[#0d091b]/90 px-3 py-2 text-xs"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-bold text-violet-200">
+                                Круг #{entry.cycle}
+                              </span>
+                              <span className="font-bold text-emerald-300">
+                                {entry.nickname}:
+                              </span>
+                              <span
+                                className={
+                                  entry.mode === 'text'
+                                    ? 'font-medium text-white'
+                                    : 'italic text-slate-400'
+                                }
+                              >
+                                {entry.text}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    <div ref={turnLogEndRef} />
+                  </div>
+                </div>
+
+                {/* Ready-to-Vote Bar right inside the Rounds Arena */}
+                <div className="mt-4 flex flex-col gap-2.5 border-t border-violet-500/20 pt-4 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => onStartVotingEarly(false)}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-2xl border py-3 px-4 text-xs font-bold transition sm:text-sm ${
+                      iVotedEarly
+                        ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
+                        : 'border-violet-400/40 bg-violet-600/20 text-violet-100 hover:bg-violet-600/35'
+                    }`}
+                  >
+                    <Vote className="h-4 w-4" />
+                    <span>
+                      {iVotedEarly
+                        ? `Вы за голосование (${earlyVoteIds.length}/${majorityNeeded})`
+                        : `Перейти к голосованию (${earlyVoteIds.length}/${majorityNeeded})`}
+                    </span>
+                  </button>
+
+                  {isHost && (
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onStartVotingEarly(true)}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-rose-600 via-fuchsia-600 to-emerald-600 py-3 px-4 text-xs font-bold text-white shadow-lg transition hover:opacity-95 sm:text-sm"
+                    >
+                      <Flame className="h-4 w-4" />
+                      <span>Голосовать сейчас (Хост)</span>
+                    </button>
+                  )}
+                </div>
               </section>
             )}
 
