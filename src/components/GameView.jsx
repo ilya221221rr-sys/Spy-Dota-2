@@ -11,12 +11,14 @@ import {
   LogOut,
   MessageSquare,
   RotateCcw,
+  Search,
   Send,
   Settings2,
   ShieldAlert,
   Sparkles,
   Trophy,
   Vote,
+  X,
 } from 'lucide-react';
 import { RuneAvatar } from './RuneAvatar.jsx';
 import { WordArtwork } from './WordArtwork.jsx';
@@ -26,6 +28,51 @@ const CATEGORY_LABELS = {
   items: 'Предметы',
   locations: 'Локации',
 };
+
+const SUBFILTERS_BY_CATEGORY = {
+  heroes: [
+    { id: 'all', label: 'Все' },
+    { id: 'str', label: 'Сила' },
+    { id: 'agi', label: 'Ловкость' },
+    { id: 'int', label: 'Интеллект' },
+    { id: 'uni', label: 'Универсал' },
+  ],
+  items: [
+    { id: 'all', label: 'Все' },
+    { id: 'shop', label: 'Лавка' },
+    { id: 'neutral', label: 'Нейтралки' },
+    { id: 'consumable', label: 'Расходники / Рошан' },
+  ],
+  locations: [],
+};
+
+function matchesWordFilter(word, query, subfilter) {
+  if (subfilter && subfilter !== 'all') {
+    const hint = (word.hint || '').toLowerCase();
+    if (subfilter === 'str' && !hint.startsWith('сила')) return false;
+    if (subfilter === 'agi' && !hint.startsWith('ловкость')) return false;
+    if (subfilter === 'int' && !hint.startsWith('интеллект')) return false;
+    if (subfilter === 'uni' && !hint.startsWith('универсал')) return false;
+    if (subfilter === 'shop' && !hint.startsWith('лавка')) return false;
+    if (subfilter === 'neutral' && !hint.startsWith('нейтральный')) return false;
+    if (
+      subfilter === 'consumable' &&
+      !hint.startsWith('расходник') &&
+      !hint.startsWith('трофей рошана')
+    ) {
+      return false;
+    }
+  }
+
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return true;
+
+  return (
+    (word.name || '').toLowerCase().includes(q) ||
+    (word.nameEn || '').toLowerCase().includes(q) ||
+    (word.hint || '').toLowerCase().includes(q)
+  );
+}
 
 function formatSeconds(sec) {
   const safe = Math.max(0, Math.floor(sec));
@@ -56,6 +103,11 @@ export function GameView({
 }) {
   const [hideRoleCard, setHideRoleCard] = useState(false);
   const [crossedWordIds, setCrossedWordIds] = useState({});
+  const [hideCrossed, setHideCrossed] = useState(false);
+  const [wordSearch, setWordSearch] = useState('');
+  const [wordSubfilter, setWordSubfilter] = useState('all');
+  const [guessSearch, setGuessSearch] = useState('');
+  const [guessSubfilter, setGuessSubfilter] = useState('all');
   const [selectedGuessWordId, setSelectedGuessWordId] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(null);
   const [chatInput, setChatInput] = useState('');
@@ -67,9 +119,14 @@ export function GameView({
   const isHost = Boolean(me?.isHost);
   const status = room.status; // 'discussion' | 'voting' | 'spy_guess' | 'results'
 
-  // Reset crossed-out notepad on new round
+  // Reset crossed-out notepad & filters on new round
   useEffect(() => {
     setCrossedWordIds({});
+    setHideCrossed(false);
+    setWordSearch('');
+    setWordSubfilter('all');
+    setGuessSearch('');
+    setGuessSubfilter('all');
     setSelectedGuessWordId(null);
     setHideRoleCard(false);
   }, [room.currentRound]);
@@ -119,8 +176,23 @@ export function GameView({
     await onSendChat(trimmed);
   };
 
-  const categoryLabel =
-    CATEGORY_LABELS[myRole?.category || room.settings?.category] || 'Dota 2';
+  const activeCategoryKey = myRole?.category || room.settings?.category || 'heroes';
+  const categoryLabel = CATEGORY_LABELS[activeCategoryKey] || 'Dota 2';
+  const subfilters = SUBFILTERS_BY_CATEGORY[activeCategoryKey] || [];
+  const crossedCount = Object.values(crossedWordIds).filter(Boolean).length;
+
+  const filteredDiscussionWords = (myRole?.categoryWords || []).filter((w) => {
+    if (hideCrossed && crossedWordIds[w.id]) return false;
+    return matchesWordFilter(w, wordSearch, wordSubfilter);
+  });
+
+  const filteredGuessWords = (spyGuess?.categoryWords || []).filter((w) =>
+    matchesWordFilter(w, guessSearch, guessSubfilter)
+  );
+  const selectedGuessWordObj = (spyGuess?.categoryWords || []).find(
+    (w) => w.id === selectedGuessWordId
+  );
+
   const onlinePlayers = room.players.filter((p) => p.isOnline);
   const earlyVoteIds = myRole?.earlyVotePlayerIds || [];
   const iVotedEarly = earlyVoteIds.includes(myPlayerId);
@@ -414,34 +486,108 @@ export function GameView({
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
-                {(spyGuess.categoryWords || []).map((w) => {
-                  const selected = selectedGuessWordId === w.id;
-                  return (
+              {/* Search & Quick Subfilters for Caught Spy */}
+              <div className="mb-4 space-y-2.5">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-violet-300/75" />
+                  <input
+                    type="text"
+                    value={guessSearch}
+                    onChange={(e) => setGuessSearch(e.target.value)}
+                    placeholder="Быстрый поиск на русском или английском (Пудж, BKB, Blink...)"
+                    className="w-full rounded-2xl border border-violet-400/30 bg-[#090613]/90 py-2.5 pr-9 pl-10 text-xs text-white placeholder-slate-500 focus:border-emerald-400/60 focus:outline-none sm:text-sm"
+                  />
+                  {guessSearch && (
                     <button
-                      key={w.id}
                       type="button"
-                      onClick={() => setSelectedGuessWordId(w.id)}
-                      className={`flex flex-col items-start rounded-2xl border p-3 text-left transition ${
-                        selected
-                          ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.3)]'
-                          : 'border-violet-500/20 bg-[#090613]/85 hover:border-violet-400/45'
-                      }`}
+                      onClick={() => setGuessSearch('')}
+                      className="absolute top-1/2 right-3 -translate-y-1/2 rounded-md p-0.5 text-slate-400 hover:text-white"
                     >
-                      <span className="text-xs font-bold text-white sm:text-sm">
-                        {w.name}
-                      </span>
-                      {w.hint && (
-                        <span className="mt-1 line-clamp-2 text-[11px] text-slate-400">
-                          {w.hint}
-                        </span>
-                      )}
+                      <X className="h-4 w-4" />
                     </button>
-                  );
-                })}
+                  )}
+                </div>
+
+                {subfilters.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {subfilters.map((sf) => (
+                        <button
+                          key={sf.id}
+                          type="button"
+                          onClick={() => setGuessSubfilter(sf.id)}
+                          className={`rounded-xl border px-2.5 py-1 text-xs font-semibold transition ${
+                            guessSubfilter === sf.id
+                              ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
+                              : 'border-violet-500/20 bg-[#090613]/75 text-slate-300 hover:border-violet-400/45'
+                          }`}
+                        >
+                          {sf.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      Найдено: {filteredGuessWords.length} из{' '}
+                      {(spyGuess.categoryWords || []).length}
+                    </span>
+                  </div>
+                )}
               </div>
 
-              <div className="mt-6 flex justify-center">
+              <div className="max-h-[390px] overflow-y-auto pr-1">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+                  {filteredGuessWords.map((w) => {
+                    const selected = selectedGuessWordId === w.id;
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => setSelectedGuessWordId(w.id)}
+                        className={`flex items-center gap-2.5 rounded-2xl border p-2.5 text-left transition ${
+                          selected
+                            ? 'border-emerald-400 bg-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                            : 'border-violet-500/20 bg-[#090613]/85 hover:border-violet-400/45'
+                        }`}
+                      >
+                        {w.image && (
+                          <img
+                            src={w.image}
+                            alt=""
+                            loading="lazy"
+                            className="h-9 w-12 shrink-0 rounded-lg border border-white/10 bg-[#070510] object-cover"
+                          />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-bold text-white sm:text-sm">
+                            {w.name}
+                          </div>
+                          {w.hint && (
+                            <div className="mt-0.5 truncate text-[11px] text-slate-400">
+                              {w.hint}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-col items-center gap-3">
+                {selectedGuessWordObj && (
+                  <div className="inline-flex items-center gap-2.5 rounded-2xl border border-emerald-400/40 bg-emerald-950/45 px-4 py-2 text-xs text-emerald-200 sm:text-sm">
+                    {selectedGuessWordObj.image && (
+                      <img
+                        src={selectedGuessWordObj.image}
+                        alt=""
+                        className="h-7 w-9 rounded object-cover"
+                      />
+                    )}
+                    <span>
+                      Выбрано: <strong>{selectedGuessWordObj.name}</strong>
+                    </span>
+                  </div>
+                )}
                 <button
                   type="button"
                   disabled={!selectedGuessWordId || isBusy}
@@ -660,37 +806,125 @@ export function GameView({
                       ВСЕ СЛОВА КАТЕГОРИИ «{categoryLabel.toUpperCase()}»
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Нажмите на карточку слова, чтобы вычеркнуть неподходящее (видно
-                      только вам)
+                      Нажмите на карточку, чтобы вычеркнуть неподходящее (видно только вам)
                     </p>
                   </div>
-                  <span className="rounded-lg border border-violet-400/25 bg-violet-950/40 px-2.5 py-1 text-xs font-semibold text-violet-200">
-                    {myRole.categoryWords.length} слов
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {crossedCount > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setHideCrossed((v) => !v)}
+                          className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+                            hideCrossed
+                              ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+                              : 'border-violet-400/25 bg-[#090613]/80 text-slate-300 hover:border-violet-400/50'
+                          }`}
+                        >
+                          {hideCrossed ? 'Показать все' : `Скрыть (${crossedCount})`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCrossedWordIds({})}
+                          className="rounded-lg border border-rose-500/25 bg-rose-950/30 px-2 py-1 text-xs text-rose-200 transition hover:bg-rose-900/45"
+                        >
+                          Сброс
+                        </button>
+                      </>
+                    )}
+                    <span className="rounded-lg border border-violet-400/25 bg-violet-950/40 px-2.5 py-1 text-xs font-semibold text-violet-200">
+                      {filteredDiscussionWords.length} / {myRole.categoryWords.length}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {myRole.categoryWords.map((w) => {
-                    const crossed = Boolean(crossedWordIds[w.id]);
-                    const isSecretMatch = !myRole.isSpy && myRole.word?.id === w.id;
-
-                    return (
+                {/* Search & Subfilter Bar */}
+                <div className="mb-3 space-y-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-violet-300/70" />
+                    <input
+                      type="text"
+                      value={wordSearch}
+                      onChange={(e) => setWordSearch(e.target.value)}
+                      placeholder="Поиск героя, предмета или подсказки (Пудж, BKB, Сила...)"
+                      className="w-full rounded-xl border border-violet-500/25 bg-[#090613] py-2 pr-8 pl-9 text-xs text-white placeholder-slate-500 focus:border-emerald-400/60 focus:outline-none sm:text-sm"
+                    />
+                    {wordSearch && (
                       <button
-                        key={w.id}
                         type="button"
-                        onClick={() => toggleCrossWord(w.id)}
-                        className={`rounded-xl border px-3 py-2.5 text-left text-xs transition ${
-                          crossed
-                            ? 'border-slate-800 bg-[#080610]/50 text-slate-500 line-through opacity-55'
-                            : isSecretMatch
-                              ? 'border-emerald-400/50 bg-emerald-950/35 font-bold text-emerald-200'
-                              : 'border-violet-500/20 bg-[#090613]/85 font-medium text-slate-200 hover:border-violet-400/45'
-                        }`}
+                        onClick={() => setWordSearch('')}
+                        className="absolute top-1/2 right-2.5 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-white"
                       >
-                        {w.name}
+                        <X className="h-3.5 w-3.5" />
                       </button>
-                    );
-                  })}
+                    )}
+                  </div>
+
+                  {subfilters.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {subfilters.map((sf) => (
+                        <button
+                          key={sf.id}
+                          type="button"
+                          onClick={() => setWordSubfilter(sf.id)}
+                          className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition sm:text-xs ${
+                            wordSubfilter === sf.id
+                              ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
+                              : 'border-violet-500/20 bg-[#090613]/75 text-slate-300 hover:border-violet-400/45'
+                          }`}
+                        >
+                          {sf.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="max-h-[410px] overflow-y-auto pr-1">
+                  {filteredDiscussionWords.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-violet-500/25 bg-[#090613]/60 py-8 text-center text-xs text-slate-400">
+                      Ничего не найдено по текущему фильтру
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {filteredDiscussionWords.map((w) => {
+                        const crossed = Boolean(crossedWordIds[w.id]);
+                        const isSecretMatch = !myRole.isSpy && myRole.word?.id === w.id;
+
+                        return (
+                          <button
+                            key={w.id}
+                            type="button"
+                            onClick={() => toggleCrossWord(w.id)}
+                            className={`flex items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left text-xs transition ${
+                              crossed
+                                ? 'border-slate-800 bg-[#080610]/50 text-slate-500 line-through opacity-50'
+                                : isSecretMatch
+                                  ? 'border-emerald-400/55 bg-emerald-950/40 font-bold text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.18)]'
+                                  : 'border-violet-500/20 bg-[#090613]/85 font-medium text-slate-200 hover:border-violet-400/45'
+                            }`}
+                          >
+                            {w.image && (
+                              <img
+                                src={w.image}
+                                alt=""
+                                loading="lazy"
+                                className="h-7 w-10 shrink-0 rounded-md border border-white/10 bg-[#070510] object-cover"
+                              />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate">{w.name}</div>
+                              {w.hint && (
+                                <div className="truncate text-[10px] font-normal text-slate-400">
+                                  {w.hint}
+                                </div>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Early Voting Controls during Discussion */}
