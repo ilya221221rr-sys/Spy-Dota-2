@@ -22,11 +22,11 @@ import {
 import { RuneAvatar } from './RuneAvatar.jsx';
 
 const ROUND_TIME_OPTIONS = [
-  { seconds: 120, label: '2 мин' },
-  { seconds: 180, label: '3 мин' },
-  { seconds: 240, label: '4 мин' },
-  { seconds: 300, label: '5 мин' },
-  { seconds: 360, label: '6 мин' },
+  { seconds: 0, label: 'Без лимита ∞' },
+  { seconds: 30, label: '30с / ход' },
+  { seconds: 45, label: '45с / ход' },
+  { seconds: 60, label: '60с / ход' },
+  { seconds: 90, label: '90с / ход' },
 ];
 
 const SPY_COUNT_OPTIONS = [
@@ -496,17 +496,22 @@ export function LobbyView({
                 </div>
               </div>
 
-              {/* Round Time Selector */}
+              {/* Turn Time Selector (Endless Rounds) */}
               <div>
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-1 flex items-center justify-between">
                   <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-300">
                     <Clock className="h-3.5 w-3.5 text-violet-400" />
-                    Время раунда
+                    Раунды ходов (время на ход)
                   </span>
                   <span className="text-xs font-bold text-emerald-300">
-                    {Math.round(room.settings.roundTimeSeconds / 60)} мин.
+                    {room.settings.roundTimeSeconds === 0
+                      ? 'Бесконечно ∞'
+                      : `${room.settings.roundTimeSeconds} сек / ход`}
                   </span>
                 </div>
+                <p className="mb-2 text-[11px] text-slate-400">
+                  Круги ходов идут бесконечно, пока игроки сами не запустят голосование
+                </p>
 
                 <div className="grid grid-cols-5 gap-1.5">
                   {ROUND_TIME_OPTIONS.map((opt) => {
@@ -519,7 +524,7 @@ export function LobbyView({
                         onClick={() =>
                           onUpdateSettings({ roundTimeSeconds: opt.seconds })
                         }
-                        className={`rounded-xl border py-2.5 text-xs font-bold transition ${
+                        className={`rounded-xl border px-1 py-2.5 text-[11px] font-bold transition ${
                           active
                             ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
                             : 'border-violet-500/15 bg-[#090613]/80 text-slate-400 hover:border-violet-400/35 hover:text-slate-200'
